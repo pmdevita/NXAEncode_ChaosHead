@@ -180,7 +180,7 @@ int main(int argc, char *argv[]) {
         .chunksize = 24,
         .version = version,
         .dataOffset = enableLoopSection ? 0x60 : 0x20,
-        .MAGIC2 = 0x00000020,
+        .MAGIC2 = 0x20,
         .sampleRate = sampleRate,
         .channelCount = channels,
         .frameSize = 0,
@@ -192,7 +192,7 @@ int main(int argc, char *argv[]) {
     struct NXAHeader_Loop loop_section = {
         .header = SECTION_LOOP_HEADER,
         .magic = 0x00000038,
-        .loopFlag = loopFlag ? 0x00000100 : 0x0,
+        .loopFlag = loopFlag ? 0x0100 : 0x0,
         .totalSamples = numSamples,
         .startSample = repeatStartSamples,
         .endSample = repeatEndSamples,
@@ -206,7 +206,9 @@ int main(int argc, char *argv[]) {
     };
 
     fwrite(&first_section, sizeof(first_section), 1, output);
-    fwrite(&loop_section, sizeof(loop_section), 1, output);
+    if (enableLoopSection) {
+        fwrite(&loop_section, sizeof(loop_section), 1, output);
+    }
     fwrite(&last_section, sizeof(last_section), 1, output);
     size_t offset = ftell(output);
     for (struct OutputBuffer *frame = head; frame; frame = frame->next) {
