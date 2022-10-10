@@ -1,28 +1,36 @@
+/*Work based on code from here:
+https://gist.github.com/tellowkrinkle/91423d561d8976be418ba770b9499bb3
+
+Input file must be raw PCM audio:
+- 48000 Hz
+- S16LE
+*/
+
 #include <stdint.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <getopt.h>
-#include <opus/opus.h>
-
-struct NXAHeader {
-    uint8_t magic[4];
-    uint32_t version;
-    uint32_t filesize;
-    uint32_t sampleRate;
-    uint16_t channelCount;
-    uint16_t frameBytes;
-    uint16_t frameSize;
-    uint16_t preSkip;
-    uint32_t numSamples;
-    uint32_t repeatStartSamples;
-    uint32_t repeatEndSamples;
-    uint32_t unknown[3];
-};
+#include <opus.h>
 
 typedef struct uint32_be {
     uint8_t data[4];
 } uint32_be_t;
+
+struct NXAHeader {
+    uint32_t MAGIC;
+    uint32_t chunksize;
+    uint8_t version;
+    uint8_t channelCount;
+    uint16_t frameSize;
+    uint32_t sampleRate;
+    uint16_t dataOffset;
+    uint32_t unknown[2];
+    uint32_t eachChunkDataSize;
+    uint32_t MAGIC2;
+    uint32_t streamSize;
+};
 
 uint32_be_t make_32_be(uint32_t i) {
     uint32_be_t o;
@@ -34,8 +42,8 @@ uint32_be_t make_32_be(uint32_t i) {
 }
 
 struct NXAv1FrameHeader {
-    uint32_be_t length;
-    uint32_be_t unknown;
+    uint32_be_t dataSize;
+    uint32_t hash;
 };
 
 struct OutputBuffer {
@@ -50,12 +58,9 @@ void printUsage(const char *progName) {
             "\t-r sampleRate:  Sample rate (default: 48000)\n"
             "\t-c channels:    Number of channels (default: 2)\n"
             "\t-s frameSize:   Size of a frame in samples (default: 960)\n"
-            "\t-f frameBytes:  Size of an encoded frame in bytes (default: 420)\n"
-            "\t-v version:     NXA version (1 or 2, higurashi uses v1, default: 1)\n"
-            "\t-b repeatBegin: Start point in samples for repeat (default: 0)\n"
-            "\t-e repeatEnd:   End point in samples for repeat (0 for end of file, default: 0)\n"
+            "\t-f frameBytes:  Size of an encoded frame in bytes (default: 240)\n"
             "\t-i inputFile:   Path to input file of raw s16le audio (default: stdin)\n"
-            "\t-o outputFile:  Path to output nxa file (default: stdout)\n";
+            "\t-o outputFile:  Path to output opus file (default: stdout)\n";
     fputs(str, stderr);
     exit(EXIT_FAILURE);
 }
@@ -64,8 +69,8 @@ int main(int argc, char *argv[]) {
     int sampleRate = 48000;
     int channels = 2;
     int frameSize = 960;
-    int frameBytes = 420;
-    int version = 1;
+    int frameBytes = 240;
+    int version = 0;
     int repeatStartSamples = 0;
     int repeatEndSamples = 0;
     FILE *input = stdin;
@@ -78,9 +83,6 @@ int main(int argc, char *argv[]) {
             case 'c': channels   = atoi(optarg); break;
             case 's': frameSize  = atoi(optarg); break;
             case 'f': frameBytes = atoi(optarg); break;
-            case 'v': version    = atoi(optarg); break;
-            case 'b': repeatStartSamples = atoi(optarg); break;
-            case 'e': repeatEndSamples   = atoi(optarg); break;
             case 'i':
                 input = fopen(optarg, "rb");
                 break;
@@ -109,7 +111,7 @@ int main(int argc, char *argv[]) {
     int sampleSize = channels * sizeof(short);
     float framesPerSecond = (float)sampleRate / (float)frameSize;
     float bitsPerSecond = framesPerSecond * frameBytes * 8;
-    int frameHeaderBytes = version == 1 ? 8 : 0;
+    int frameHeaderBytes = version == 0 ? 8 : 0;
 
     int err;
     OpusEncoder *enc = opus_encoder_create(sampleRate, channels, OPUS_APPLICATION_AUDIO, &err);
@@ -142,31 +144,34 @@ int main(int argc, char *argv[]) {
     }
 
     struct NXAHeader header = {
-            .magic = "NXA1",
+            .MAGIC = 0x80000001,
+            .MAGIC2 = 0x80000004,
+            .chunksize = 24,
             .version = version,
-            .filesize = sizeof(struct NXAHeader) + (frameHeaderBytes + frameBytes) * frames,
+            .dataOffset = 0x20,
+            .streamSize = 0,
             .sampleRate = sampleRate,
             .channelCount = channels,
-            .frameBytes = frameBytes,
-            .frameSize = frameSize,
-            .preSkip = 0,
-            .numSamples = numSamples,
-            .repeatStartSamples = repeatStartSamples,
-            .repeatEndSamples = repeatEndSamples ? repeatEndSamples : numSamples,
+            .frameSize = 0,
+            .eachChunkDataSize = 0x78,
             .unknown = {0}
     };
 
     fwrite(&header, sizeof(header), 1, output);
+    size_t offset = ftell(output);
     for (struct OutputBuffer *frame = head; frame; frame = frame->next) {
-        if (version == 1) {
-            struct NXAv1FrameHeader frameHeader = {
-                    .length = make_32_be(frameBytes),
-                    .unknown = make_32_be(0)
-            };
-            fwrite(&frameHeader, sizeof(frameHeader), 1, output);
-        }
+        struct NXAv1FrameHeader frameHeader = {
+                .dataSize = make_32_be(frameBytes)
+        };
+        fwrite(&frameHeader, sizeof(frameHeader), 1, output);
         fwrite(frame->data, frameBytes, 1, output);
     }
+    size_t stream_size = ftell(output) - offset;
+    fseek(output, 0x24, 0);
+    fwrite(&stream_size, sizeof(uint32_t), 1, output);
+    fclose(output);
+
+    printf("Finished. Bitrate: %0.f kbps", bitsPerSecond/1000);
 
     return 0;
 }
