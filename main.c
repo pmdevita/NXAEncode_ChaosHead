@@ -21,8 +21,8 @@ Input file must be raw PCM audio:
 struct NXAHeader {
     uint32_t header;
     uint32_t chunksize;
-    uint8_t version;
-    uint8_t channelCount;
+    uint8_t  version;
+    uint8_t  channelCount;
     uint16_t frameSize;
     uint32_t sampleRate;
     uint16_t dataOffset;
